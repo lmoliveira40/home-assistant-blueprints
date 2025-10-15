@@ -71,6 +71,16 @@ blueprint:
           max: -50
           unit_of_measurement: W
 
+variables:
+  input_sensor_consumo: !input sensor_consumo
+  input_number_charge_current: !input number_charge_current
+  input_binary_charge_cable: !input binary_charge_cable
+  input_sensor_charging_state: !input sensor_charging_state
+  max_amps: !input max_amps
+  min_amps: !input min_amps
+  delta_pos: !input delta_positivo
+  delta_neg: !input delta_negativo
+
 trigger:
   - platform: state
     entity_id: !input sensor_consumo
@@ -83,18 +93,13 @@ condition:
 
   - condition: template
     value_template: >
-      {% set state = states(!input sensor_charging_state) %}
+      {% set state = states(input_sensor_charging_state) %}
       {{ state in ['charging', 'on'] }}
 
   - condition: template
     value_template: >
-      {% set consumo = states(!input sensor_consumo) | float %}
-      {% set amps_atual = states(!input number_charge_current) | int %}
-      {% set max_amps = max_amps | int %}
-      {% set min_amps = min_amps | int %}
-      {% set delta_neg = delta_negativo | float %}
-      {% set delta_pos = delta_positivo | float %}
-
+      {% set consumo = states(input_sensor_consumo) | float %}
+      {% set amps_atual = states(input_number_charge_current) | int %}
       {% if consumo < delta_neg %}
         {{ amps_atual < max_amps }}
       {% elif consumo > delta_pos %}
@@ -105,12 +110,8 @@ condition:
 
 action:
   - variables:
-      consumo: "{{ states(!input sensor_consumo) | float }}"
-      amps_atual: "{{ states(!input number_charge_current) | int }}"
-      max_amps: !input max_amps
-      min_amps: !input min_amps
-      delta_neg: !input delta_negativo
-      delta_pos: !input delta_positivo
+      consumo: "{{ states(input_sensor_consumo) | float }}"
+      amps_atual: "{{ states(input_number_charge_current) | int }}"
   - choose:
       - conditions: "{{ consumo < delta_neg }}"
         sequence:
@@ -126,4 +127,5 @@ action:
               entity_id: !input number_charge_current
             data:
               value: "{{ [amps_atual - 1, min_amps] | max }}"
+
 mode: single
