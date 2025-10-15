@@ -1,0 +1,132 @@
+blueprint:
+  name: Tesla - Ajuste dinâmico da corrente de carregamento (Teslemetry + Shelly)
+  description: >
+    Ajusta automaticamente a corrente de carregamento do Tesla via Teslemetry,
+    com base na exportação de energia medida por um Shelly (Consumo).
+    Ideal para aproveitar excedente fotovoltaico.
+  domain: automation
+  input:
+    sensor_consumo:
+      name: Sensor de Consumo (Shelly)
+      description: Sensor que mede o consumo/exportação (positivo = consumindo, negativo = exportando)
+      selector:
+        entity:
+          domain: sensor
+
+    number_charge_current:
+      name: Corrente de Carregamento (A)
+      description: Entidade numérica da corrente de carregamento do Tesla (ex: number.charge_current)
+      selector:
+        entity:
+          domain: number
+
+    binary_charge_cable:
+      name: Cabo Conectado
+      description: Entidade binária que indica se o cabo está conectado (ex: binary_sensor.charge_cable)
+      selector:
+        entity:
+          domain: binary_sensor
+
+    sensor_charging_state:
+      name: Sensor de Carregamento
+      description: Entidade que indica se o veículo está carregando (on/off ou charging)
+      selector:
+        entity:
+          domain: sensor
+
+    max_amps:
+      name: Corrente Máxima (A)
+      description: Corrente máxima permitida
+      default: 16
+      selector:
+        number:
+          min: 5
+          max: 32
+          unit_of_measurement: A
+
+    min_amps:
+      name: Corrente Mínima (A)
+      description: Corrente mínima permitida
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 16
+          unit_of_measurement: A
+
+    delta_positivo:
+      name: Limiar de Consumo Positivo (W)
+      description: Quando o consumo ultrapassa este valor, reduz a corrente
+      default: 200
+      selector:
+        number:
+          min: 50
+          max: 1000
+          unit_of_measurement: W
+
+    delta_negativo:
+      name: Limiar de Exportação Negativa (W)
+      description: Quando a exportação ultrapassa este valor (negativo), aumenta a corrente
+      default: -200
+      selector:
+        number:
+          min: -2000
+          max: -50
+          unit_of_measurement: W
+
+trigger:
+  - platform: state
+    entity_id: !input sensor_consumo
+    for: "00:00:10"
+
+condition:
+  - condition: state
+    entity_id: !input binary_charge_cable
+    state: "on"
+
+  - condition: template
+    value_template: >
+      {% set state = states(!input sensor_charging_state) %}
+      {{ state in ['charging', 'on'] }}
+
+  - condition: template
+    value_template: >
+      {% set consumo = states(!input sensor_consumo) | float %}
+      {% set amps_atual = states(!input number_charge_current) | int %}
+      {% set max_amps = max_amps | int %}
+      {% set min_amps = min_amps | int %}
+      {% set delta_neg = delta_negativo | float %}
+      {% set delta_pos = delta_positivo | float %}
+
+      {% if consumo < delta_neg %}
+        {{ amps_atual < max_amps }}
+      {% elif consumo > delta_pos %}
+        {{ amps_atual > min_amps }}
+      {% else %}
+        false
+      {% endif %}
+
+action:
+  - variables:
+      consumo: "{{ states(!input sensor_consumo) | float }}"
+      amps_atual: "{{ states(!input number_charge_current) | int }}"
+      max_amps: !input max_amps
+      min_amps: !input min_amps
+      delta_neg: !input delta_negativo
+      delta_pos: !input delta_positivo
+  - choose:
+      - conditions: "{{ consumo < delta_neg }}"
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input number_charge_current
+            data:
+              value: "{{ [amps_atual + 1, max_amps] | min }}"
+      - conditions: "{{ consumo > delta_pos }}"
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: !input number_charge_current
+            data:
+              value: "{{ [amps_atual - 1, min_amps] | max }}"
+mode: single
