@@ -1,6 +1,9 @@
 blueprint:
   name: Tesla - Ajuste dinâmico da corrente de carregamento (Teslemetry + Shelly)
-  description: Ajusta automaticamente a corrente de carregamento do Tesla via Teslemetry com base na exportação de energia medida por um Shelly.
+  description: >
+    Ajusta automaticamente a corrente de carregamento do Tesla via Teslemetry
+    com base na exportação solar medida por um Shelly. Agora com delay ajustável
+    e sem necessidade de o carro estar carregando (basta o cabo estar ligado).
   domain: automation
   input:
     sensor_consumo:
@@ -23,13 +26,6 @@ blueprint:
       selector:
         entity:
           domain: binary_sensor
-
-    sensor_charging_state:
-      name: Sensor de Carregamento
-      description: Entidade que indica se o veículo está carregando (estado deve ser "on" ou "charging").
-      selector:
-        entity:
-          domain: sensor
 
     max_amps:
       name: Corrente Máxima (A)
@@ -71,15 +67,25 @@ blueprint:
           max: -50
           unit_of_measurement: W
 
+    delay_ajuste:
+      name: Tempo entre ajustes
+      description: Tempo mínimo (em segundos) entre alterações da corrente de carregamento.
+      default: 15
+      selector:
+        number:
+          min: 5
+          max: 120
+          unit_of_measurement: s
+
 variables:
   input_sensor_consumo: !input sensor_consumo
   input_number_charge_current: !input number_charge_current
   input_binary_charge_cable: !input binary_charge_cable
-  input_sensor_charging_state: !input sensor_charging_state
   max_amps: !input max_amps
   min_amps: !input min_amps
   delta_pos: !input delta_positivo
   delta_neg: !input delta_negativo
+  delay_ajuste: !input delay_ajuste
 
 trigger:
   - platform: state
@@ -89,22 +95,12 @@ trigger:
   - platform: state
     entity_id: !input sensor_consumo
     to: "unknown"
-    for: "00:03:00"
-    
-  - platform: state
-    entity_id: !input sensor_consumo
-    to: "100"
-    for: "00:03:00"
+    for: "00:01:00"
 
 condition:
   - condition: state
     entity_id: !input binary_charge_cable
     state: "on"
-
-  - condition: template
-    value_template: >
-      {% set state = states(input_sensor_charging_state) %}
-      {{ state in ['charging', 'on'] }}
 
   - condition: template
     value_template: >
@@ -122,6 +118,7 @@ action:
   - variables:
       consumo: "{{ states(input_sensor_consumo) | float }}"
       amps_atual: "{{ states(input_number_charge_current) | int }}"
+
   - choose:
       - conditions: "{{ consumo < delta_neg }}"
         sequence:
@@ -130,6 +127,7 @@ action:
               entity_id: !input number_charge_current
             data:
               value: "{{ [amps_atual + 1, max_amps] | min }}"
+
       - conditions: "{{ consumo > delta_pos }}"
         sequence:
           - service: number.set_value
@@ -137,11 +135,8 @@ action:
               entity_id: !input number_charge_current
             data:
               value: "{{ [amps_atual - 1, min_amps] | max }}"
-      - conditions: "{{ consumo > 100 }}"
-        sequence:
-          - service: number.set_value
-            target:
-              entity_id: !input number_charge_current
-            data:
-              value: 0
+
+  - delay:
+      seconds: !input delay_ajuste
+
 mode: single
