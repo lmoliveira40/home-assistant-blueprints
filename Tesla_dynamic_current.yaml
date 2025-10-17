@@ -1,8 +1,8 @@
-alias: Tesla - Carregamento Solar Automático
-description: Ajusta corrente do Tesla com base na produção solar
+alias: Tesla - Carregamento Solar MPPT
+description: Ajuste automático da corrente do Tesla baseado na produção solar (MPPT)
 trigger:
   - platform: time_pattern
-    seconds: "/10"  # executa a cada 10 segundos
+    seconds: "/10"  # verifica a cada 10 segundos
 condition:
   - condition: state
     entity_id: binary_sensor.modelx_charge_cable
@@ -13,9 +13,16 @@ action:
       amps_atual: "{{ states('number.charge_current') | int(0) }}"
       max_amps: 16
       min_amps: 5
-      delta: "{{ (consumo / 230) | int }}"
+      # calcula delta proporcional: cada 230W = 1A
+      delta: >-
+        {% set d = (consumo / 230) | int %}
+        {% if d == 0 and consumo != 0 %}
+          {% if consumo > 0 %}-1{% else %}1{% endif %}
+        {% else %}
+          {% if d > 5 %}5{% elif d < -5 %}-5{% else %}{{d}}{% endif %}
+        {% endif %}
   - choose:
-      # Se estiver exportando energia (consumo < 0), aumenta corrente
+      # Consumo negativo -> aumenta corrente suavemente
       - conditions: "{{ consumo < 0 and amps_atual < max_amps }}"
         sequence:
           - service: number.set_value
@@ -23,7 +30,7 @@ action:
               entity_id: number.charge_current
             data:
               value: "{{ [amps_atual + (-delta), max_amps] | min }}"
-      # Se consumo positivo, reduz corrente
+      # Consumo positivo -> diminui corrente suavemente
       - conditions: "{{ consumo > 0 and amps_atual > min_amps }}"
         sequence:
           - service: number.set_value
@@ -32,3 +39,4 @@ action:
             data:
               value: "{{ [amps_atual - delta, min_amps] | max }}"
 mode: single
+
