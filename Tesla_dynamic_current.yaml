@@ -1,67 +1,37 @@
-blueprint:
-  name: Tesla - Carregamento Solar MPPT Profissional
-  description: Ajusta automaticamente a corrente do Tesla baseado na produção solar
-  domain: automation
-  input:
-    sensor_consumo:
-      name: Sensor de Consumo (W)
-      selector:
-        entity:
-          domain: sensor
-    number_charge_current:
-      name: Corrente do Carregamento (A)
-      selector:
-        entity:
-          domain: number
-    binary_charge_cable:
-      name: Cabo Conectado
-      selector:
-        entity:
-          domain: binary_sensor
-    max_amps:
-      name: Corrente Máxima (A)
-      default: 16
-      selector:
-        number:
-          min: 5
-          max: 32
-          unit_of_measurement: A
-    min_amps:
-      name: Corrente Mínima (A)
-      default: 5
-      selector:
-        number:
-          min: 1
-          max: 16
-          unit_of_measurement: A
-
+alias: Tesla - Carregamento Solar MPPT com Teslemetry
+description: Ajuste automático da corrente do Tesla baseado na produção solar
 trigger:
   - platform: time_pattern
     seconds: "/10"
-
 condition:
   - condition: state
-    entity_id: !input binary_charge_cable
+    entity_id: binary_sensor.modelx_charge_cable
     state: "on"
-
 action:
-  - choose:
-      - conditions: >
-          {{ (states(!input sensor_consumo) | float(0)) < 0 and (states(!input number_charge_current) | int(0)) < !input max_amps }}
-        sequence:
-          - service: number.set_value
-            target:
-              entity_id: !input number_charge_current
-            data:
-              value: >
-                {% set consumo = states(!input sensor_consumo) | float(0) %}
-                {% set amps_atual = states(!input number_charge_current) | int(0) %}
-                {% set delta = (consumo / 230) | int %}
-                {% set delta = delta if delta != 0 else 1 %}
-                {{ [amps_atual + (-delta), !input max_amps] | min }}
-      - conditions: >
-          {{ (states(!input sensor_consumo) | float(0)) > 0 and (states(!input number_charge_current) | int(0)) > !input min_amps }}
-        sequence:
-          - service: number.set_value
-            target:
-              entity_id: !input number_charge_cur_
+  - variables:
+      consumo: "{{ states('sensor.consumo_energy') | float(0) }}"
+      current_actual: "{{ state_attr('climate.modelx', 'charging_current') | int(0) }}"
+      max_amps: 16
+      min_amps: 5
+      # delta proporcional: cada 230W = 1A, mínimo 1A, máximo 5A
+      delta: >-
+        {% set d = (consumo / 230) | int %}
+        {% if d == 0 and consumo != 0 %}
+          {% if consumo > 0 %}-1{% else %}1{% endif %}
+        {% else %}
+          {% if d > 5 %}5{% elif d < -5 %}-5{% else %}{{d}}{% endif %}
+        {% endif %}
+      new_current: >-
+        {% if consumo < 0 %}
+          {{ [current_actual + (-delta), max_amps] | min }}
+        {% elif consumo > 0 %}
+          {{ [current_actual - delta, min_amps] | max }}
+        {% else %}
+          {{ current_actual }}
+        {% endif %}
+  - service: teslemetry.set_charging_current
+    target:
+      entity_id: climate.modelx
+    data:
+      current: "{{ new_current }}"
+mode: single
