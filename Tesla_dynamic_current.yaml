@@ -1,6 +1,6 @@
 blueprint:
   name: Tesla - Carregamento Solar MPPT Profissional
-  description: Ajusta automaticamente a corrente do Tesla baseado na produção/consumo solar de forma proporcional e suave
+  description: Ajusta a corrente do Tesla baseado na produção solar (MPPT) de forma proporcional e suave
   domain: automation
   input:
     sensor_consumo:
@@ -42,18 +42,9 @@ blueprint:
           max: 16
           unit_of_measurement: A
 
-    check_interval:
-      name: Intervalo de Verificação (segundos)
-      default: 10
-      selector:
-        number:
-          min: 5
-          max: 300
-          unit_of_measurement: segundos
-
 trigger:
   - platform: time_pattern
-    seconds: "/!input check_interval"
+    seconds: "/10"
 
 condition:
   - condition: state
@@ -62,11 +53,10 @@ condition:
 
 action:
   - variables:
-      consumo: "{{ states('!input sensor_consumo') | float(0) }}"
-      amps_atual: "{{ states('!input number_charge_current') | int(0) }}"
+      consumo: "{{ states(!input sensor_consumo) | float(0) }}"
+      amps_atual: "{{ states(!input number_charge_current) | int(0) }}"
       max_amps: !input max_amps
       min_amps: !input min_amps
-      # delta proporcional: cada 230W = 1A, limitado entre 1A e 5A
       delta: >-
         {% set d = (consumo / 230) | int %}
         {% if d == 0 and consumo != 0 %}
@@ -75,7 +65,6 @@ action:
           {% if d > 5 %}5{% elif d < -5 %}-5{% else %}{{d}}{% endif %}
         {% endif %}
   - choose:
-      # Se estamos exportando energia (consumo < 0), aumenta corrente proporcional
       - conditions: "{{ consumo < 0 and amps_atual < max_amps }}"
         sequence:
           - service: number.set_value
@@ -83,7 +72,6 @@ action:
               entity_id: !input number_charge_current
             data:
               value: "{{ [amps_atual + (-delta), max_amps] | min }}"
-      # Se consumo positivo (consumindo), reduz corrente proporcional
       - conditions: "{{ consumo > 0 and amps_atual > min_amps }}"
         sequence:
           - service: number.set_value
