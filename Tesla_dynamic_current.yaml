@@ -1,29 +1,23 @@
 blueprint:
   name: Tesla - Carregamento Solar MPPT Profissional
-  description: Ajusta a corrente do Tesla baseado na produção solar (MPPT) de forma proporcional e suave
+  description: Ajusta automaticamente a corrente do Tesla baseado na produção solar
   domain: automation
   input:
     sensor_consumo:
       name: Sensor de Consumo (W)
-      description: Consumo positivo = consumindo, negativo = exportando
       selector:
         entity:
           domain: sensor
-
     number_charge_current:
       name: Corrente do Carregamento (A)
-      description: Entidade "number" que controla a corrente do Tesla
       selector:
         entity:
           domain: number
-
     binary_charge_cable:
       name: Cabo Conectado
-      description: Indica se o cabo está conectado
       selector:
         entity:
           domain: binary_sensor
-
     max_amps:
       name: Corrente Máxima (A)
       default: 16
@@ -32,7 +26,6 @@ blueprint:
           min: 5
           max: 32
           unit_of_measurement: A
-
     min_amps:
       name: Corrente Mínima (A)
       default: 5
@@ -52,36 +45,23 @@ condition:
     state: "on"
 
 action:
-  - variables:
-      sensor_consumo_entity: !input sensor_consumo
-      number_charge_current_entity: !input number_charge_current
-      max_amps: !input max_amps
-      min_amps: !input min_amps
-      consumo: "{{ states(sensor_consumo_entity) | float(0) }}"
-      amps_atual: "{{ states(number_charge_current_entity) | int(0) }}"
-      # delta proporcional: cada 230W = 1A, limitado entre 1 e 5
-      delta: >-
-        {% set d = (consumo / 230) | int %}
-        {% if d == 0 and consumo != 0 %}
-          {% if consumo > 0 %}-1{% else %}1{% endif %}
-        {% else %}
-          {% if d > 5 %}5{% elif d < -5 %}-5{% else %}{{d}}{% endif %}
-        {% endif %}
   - choose:
-      # Consumo negativo -> aumenta corrente
-      - conditions: "{{ consumo < 0 and amps_atual < max_amps }}"
+      - conditions: >
+          {{ (states(!input sensor_consumo) | float(0)) < 0 and (states(!input number_charge_current) | int(0)) < !input max_amps }}
         sequence:
           - service: number.set_value
             target:
               entity_id: !input number_charge_current
             data:
-              value: "{{ [amps_atual + (-delta), max_amps] | min }}"
-      # Consumo positivo -> diminui corrente
-      - conditions: "{{ consumo > 0 and amps_atual > min_amps }}"
+              value: >
+                {% set consumo = states(!input sensor_consumo) | float(0) %}
+                {% set amps_atual = states(!input number_charge_current) | int(0) %}
+                {% set delta = (consumo / 230) | int %}
+                {% set delta = delta if delta != 0 else 1 %}
+                {{ [amps_atual + (-delta), !input max_amps] | min }}
+      - conditions: >
+          {{ (states(!input sensor_consumo) | float(0)) > 0 and (states(!input number_charge_current) | int(0)) > !input min_amps }}
         sequence:
           - service: number.set_value
             target:
-              entity_id: !input number_charge_current
-            data:
-              value: "{{ [amps_atual - delta, min_amps] | max }}"
-mode: single
+              entity_id: !input number_charge_cur_
