@@ -53,10 +53,13 @@ condition:
 
 action:
   - variables:
-      consumo: "{{ states(!input sensor_consumo) | float(0) }}"
-      amps_atual: "{{ states(!input number_charge_current) | int(0) }}"
+      sensor_consumo_entity: !input sensor_consumo
+      number_charge_current_entity: !input number_charge_current
       max_amps: !input max_amps
       min_amps: !input min_amps
+      consumo: "{{ states(sensor_consumo_entity) | float(0) }}"
+      amps_atual: "{{ states(number_charge_current_entity) | int(0) }}"
+      # delta proporcional: cada 230W = 1A, limitado entre 1 e 5
       delta: >-
         {% set d = (consumo / 230) | int %}
         {% if d == 0 and consumo != 0 %}
@@ -65,6 +68,7 @@ action:
           {% if d > 5 %}5{% elif d < -5 %}-5{% else %}{{d}}{% endif %}
         {% endif %}
   - choose:
+      # Consumo negativo -> aumenta corrente
       - conditions: "{{ consumo < 0 and amps_atual < max_amps }}"
         sequence:
           - service: number.set_value
@@ -72,6 +76,7 @@ action:
               entity_id: !input number_charge_current
             data:
               value: "{{ [amps_atual + (-delta), max_amps] | min }}"
+      # Consumo positivo -> diminui corrente
       - conditions: "{{ consumo > 0 and amps_atual > min_amps }}"
         sequence:
           - service: number.set_value
