@@ -1,14 +1,15 @@
 blueprint:
   name: Tesla - Carregamento Solar Inteligente (Teslemetry + Shelly)
   description: >
-    Controla automaticamente o carregamento do Tesla de acordo com o excedente solar medido por um Shelly.
-    Inicia o carregamento quando há exportação (negativa) e pausa quando o consumo da rede é superior a 80 W.
-    Ajusta dinamicamente a corrente a cada 15 s.
+    Controla automaticamente o carregamento do Tesla de acordo com a produção solar medida por um Shelly.
+    - Inicia carregamento se houver exportação solar suficiente.
+    - Pausa carregamento se o consumo da rede ultrapassar 80 W por mais de 15 segundos.
+    - Ajusta dinamicamente a corrente a cada 15 segundos para evitar flutuações.
   domain: automation
   input:
     sensor_consumo:
       name: Sensor de Consumo (Shelly)
-      description: Sensor que mede o consumo/exportação (positivo = consumindo, negativo = exportando)
+      description: Sensor que mede o consumo/exportação (positivo = consumindo da rede, negativo = exportando)
       selector:
         entity:
           domain: sensor
@@ -22,14 +23,14 @@ blueprint:
 
     binary_charge_cable:
       name: Cabo Conectado
-      description: Entidade binária que indica se o cabo está conectado ao Tesla.
+      description: Indica se o cabo está plugado no Tesla.
       selector:
         entity:
           domain: binary_sensor
 
     tesla_vehicle:
-      name: Veículo Tesla
-      description: Entidade principal do veículo Tesla (usada para iniciar/parar o carregamento).
+      name: Veículo Tesla (Teslemetry)
+      description: Entidade principal do veículo Tesla (ex: teslemetry.modelx)
       selector:
         entity:
           integration: teslemetry
@@ -73,8 +74,8 @@ blueprint:
           unit_of_measurement: W
 
     delay_ajuste:
-      name: Tempo entre ajustes
-      description: Tempo mínimo (em segundos) entre alterações da corrente de carregamento.
+      name: Tempo entre ajustes (segundos)
+      description: Tempo mínimo entre alterações da corrente para evitar flutuações.
       default: 15
       selector:
         number:
@@ -94,16 +95,19 @@ variables:
   delay_ajuste: !input delay_ajuste
 
 trigger:
+  # Dispara sempre que o consumo muda por 10 segundos
   - platform: state
     entity_id: !input sensor_consumo
     for: "00:00:10"
-
+    
+  # Dispara se o sensor ficar "unknown" por 1 minuto
   - platform: state
     entity_id: !input sensor_consumo
     to: "unknown"
     for: "00:01:00"
 
 condition:
+  # Só roda se o cabo estiver conectado
   - condition: state
     entity_id: !input binary_charge_cable
     state: "on"
@@ -114,9 +118,13 @@ action:
       amps_atual: "{{ states(input_number_charge_current) | int }}"
 
   - choose:
-      # 🚀 Iniciar carregamento e aumentar corrente quando há exportação solar
+      # 1️⃣ Inicia carregamento e aumenta corrente se há exportação solar suficiente
       - conditions: "{{ consumo < delta_neg }}"
         sequence:
+          - service: teslemetry.wake_up
+            target:
+              entity_id: !input tesla_vehicle
+          - delay: "00:00:05"
           - service: teslemetry.start_charging
             target:
               entity_id: !input tesla_vehicle
@@ -127,7 +135,7 @@ action:
             data:
               value: "{{ [amps_atual + 1, max_amps] | min }}"
 
-      # ⚡ Reduzir corrente se o consumo da rede for alto
+      # 2️⃣ Reduz corrente se consumo positivo acima do limiar
       - conditions: "{{ consumo > delta_pos and amps_atual > min_amps }}"
         sequence:
           - service: number.set_value
@@ -136,13 +144,20 @@ action:
             data:
               value: "{{ [amps_atual - 1, min_amps] | max }}"
 
-      # 🛑 Parar carregamento se estiver a puxar da rede (consumo > limiar positivo)
-      - conditions: "{{ consumo > delta_pos }}"
+      # 3️⃣ Para carregamento se consumo > limiar positivo por mais de 15 segundos (histerese)
+      - conditions:
+          - condition: template
+            value_template: "{{ consumo > delta_pos }}"
         sequence:
+          - wait_for_trigger:
+              - platform: template
+                value_template: "{{ states(input_sensor_consumo) | float > delta_pos }}"
+                for: "00:00:15"
           - service: teslemetry.stop_charging
             target:
               entity_id: !input tesla_vehicle
 
+  # Delay entre ajustes para evitar oscilações rápidas
   - delay:
       seconds: !input delay_ajuste
 
