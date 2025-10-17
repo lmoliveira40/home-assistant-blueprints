@@ -1,9 +1,9 @@
 blueprint:
-  name: Tesla - Ajuste dinâmico da corrente de carregamento (Teslemetry + Shelly)
+  name: Tesla - Carregamento Solar Inteligente (Teslemetry + Shelly)
   description: >
-    Ajusta automaticamente a corrente de carregamento do Tesla via Teslemetry
-    com base na exportação solar medida por um Shelly. Agora com delay ajustável
-    e sem necessidade de o carro estar carregando (basta o cabo estar ligado).
+    Controla automaticamente o carregamento do Tesla de acordo com o excedente solar medido por um Shelly.
+    Inicia o carregamento quando há exportação (negativa) e pausa quando o consumo da rede é superior a 80 W.
+    Ajusta dinamicamente a corrente a cada 15 s.
   domain: automation
   input:
     sensor_consumo:
@@ -27,9 +27,15 @@ blueprint:
         entity:
           domain: binary_sensor
 
+    tesla_vehicle:
+      name: Veículo Tesla
+      description: Entidade principal do veículo Tesla (usada para iniciar/parar o carregamento).
+      selector:
+        entity:
+          integration: teslemetry
+
     max_amps:
       name: Corrente Máxima (A)
-      description: Corrente máxima permitida para carregamento.
       default: 16
       selector:
         number:
@@ -39,7 +45,6 @@ blueprint:
 
     min_amps:
       name: Corrente Mínima (A)
-      description: Corrente mínima permitida para carregamento.
       default: 5
       selector:
         number:
@@ -49,8 +54,8 @@ blueprint:
 
     delta_positivo:
       name: Limiar de Consumo Positivo (W)
-      description: Quando o consumo ultrapassa esse valor, a corrente será reduzida.
-      default: 200
+      description: Quando o consumo ultrapassa esse valor, a corrente será reduzida ou o carregamento será pausado.
+      default: 80
       selector:
         number:
           min: 50
@@ -59,7 +64,7 @@ blueprint:
 
     delta_negativo:
       name: Limiar de Exportação Negativa (W)
-      description: Quando a exportação ultrapassa esse valor (negativo), a corrente será aumentada.
+      description: Quando a exportação ultrapassa esse valor (negativo), o carregamento será iniciado.
       default: -200
       selector:
         number:
@@ -81,6 +86,7 @@ variables:
   input_sensor_consumo: !input sensor_consumo
   input_number_charge_current: !input number_charge_current
   input_binary_charge_cable: !input binary_charge_cable
+  input_tesla_vehicle: !input tesla_vehicle
   max_amps: !input max_amps
   min_amps: !input min_amps
   delta_pos: !input delta_positivo
@@ -102,39 +108,40 @@ condition:
     entity_id: !input binary_charge_cable
     state: "on"
 
-  - condition: template
-    value_template: >
-      {% set consumo = states(input_sensor_consumo) | float %}
-      {% set amps_atual = states(input_number_charge_current) | int %}
-      {% if consumo < delta_neg %}
-        {{ amps_atual < max_amps }}
-      {% elif consumo > delta_pos %}
-        {{ amps_atual > min_amps }}
-      {% else %}
-        false
-      {% endif %}
-
 action:
   - variables:
       consumo: "{{ states(input_sensor_consumo) | float }}"
       amps_atual: "{{ states(input_number_charge_current) | int }}"
 
   - choose:
+      # 🚀 Iniciar carregamento e aumentar corrente quando há exportação solar
       - conditions: "{{ consumo < delta_neg }}"
         sequence:
+          - service: teslemetry.start_charging
+            target:
+              entity_id: !input tesla_vehicle
+          - delay: "00:00:05"
           - service: number.set_value
             target:
               entity_id: !input number_charge_current
             data:
               value: "{{ [amps_atual + 1, max_amps] | min }}"
 
-      - conditions: "{{ consumo > delta_pos }}"
+      # ⚡ Reduzir corrente se o consumo da rede for alto
+      - conditions: "{{ consumo > delta_pos and amps_atual > min_amps }}"
         sequence:
           - service: number.set_value
             target:
               entity_id: !input number_charge_current
             data:
               value: "{{ [amps_atual - 1, min_amps] | max }}"
+
+      # 🛑 Parar carregamento se estiver a puxar da rede (consumo > limiar positivo)
+      - conditions: "{{ consumo > delta_pos }}"
+        sequence:
+          - service: teslemetry.stop_charging
+            target:
+              entity_id: !input tesla_vehicle
 
   - delay:
       seconds: !input delay_ajuste
