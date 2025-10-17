@@ -1,73 +1,34 @@
-blueprint:
-  name: Tesla - Carregamento Solar Dinâmico Proporcional
-  description: Ajusta a corrente do Tesla dinamicamente com base no consumo/produção solar
-  domain: automation
-  input:
-    sensor_consumo:
-      name: Sensor de Consumo (W)
-      description: Consumo positivo = consumindo, negativo = exportando
-      selector:
-        entity:
-          domain: sensor
-
-    number_charge_current:
-      name: Corrente do Carregamento (A)
-      description: Entidade "number" que controla a corrente do Tesla
-      selector:
-        entity:
-          domain: number
-
-    binary_charge_cable:
-      name: Cabo Conectado
-      description: Indica se o cabo está conectado
-      selector:
-        entity:
-          domain: binary_sensor
-
-    max_amps:
-      name: Corrente Máxima (A)
-      default: 16
-      selector:
-        number:
-          min: 5
-          max: 32
-          unit_of_measurement: A
-
-    min_amps:
-      name: Corrente Mínima (A)
-      default: 5
-      selector:
-        number:
-          min: 1
-          max: 16
-          unit_of_measurement: A
-
-    stop_threshold:
-      name: Limiar de Consumo para Parar (W)
-      default: 0
-      selector:
-        number:
-          min: -1000
-          max: 1000
-          unit_of_measurement: W
-
+alias: Tesla - Carregamento Solar Automático
+description: Ajusta corrente do Tesla com base na produção solar
 trigger:
   - platform: time_pattern
     seconds: "/10"  # executa a cada 10 segundos
-
 condition:
   - condition: state
-    entity_id: !input binary_charge_cable
+    entity_id: binary_sensor.modelx_charge_cable
     state: "on"
-
 action:
   - variables:
-      consumo: "{{ states(input_sensor_consumo) | float(0) }}"
-      amps_atual: "{{ states(input_number_charge_current) | int(0) }}"
-      max_amps: !input max_amps
-      min_amps: !input min_amps
-      stop_threshold: !input stop_threshold
-      # Ajuste proporcional: 100W = 1A, mínimo 1A, máximo 5A por execução
-      delta: >-
-        {% set d = (consumo / 100) | int %}
-        {% if d == 0
+      consumo: "{{ states('sensor.consumo_energy') | float(0) }}"
+      amps_atual: "{{ states('number.charge_current') | int(0) }}"
+      max_amps: 16
+      min_amps: 5
+      delta: "{{ (consumo / 230) | int }}"
+  - choose:
+      # Se estiver exportando energia (consumo < 0), aumenta corrente
+      - conditions: "{{ consumo < 0 and amps_atual < max_amps }}"
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: number.charge_current
+            data:
+              value: "{{ [amps_atual + (-delta), max_amps] | min }}"
+      # Se consumo positivo, reduz corrente
+      - conditions: "{{ consumo > 0 and amps_atual > min_amps }}"
+        sequence:
+          - service: number.set_value
+            target:
+              entity_id: number.charge_current
+            data:
+              value: "{{ [amps_atual - delta, min_amps] | max }}"
+mode: single
