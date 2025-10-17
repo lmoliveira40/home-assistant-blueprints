@@ -1,6 +1,6 @@
 blueprint:
-  name: Tesla - Carregamento Dinâmico Solar
-  description: Ajusta automaticamente a corrente do Tesla com base na produção/consumo solar
+  name: Tesla - Carregamento Solar Dinâmico Proporcional
+  description: Ajusta a corrente do Tesla dinamicamente com base no consumo/produção solar
   domain: automation
   input:
     sensor_consumo:
@@ -42,10 +42,18 @@ blueprint:
           max: 16
           unit_of_measurement: A
 
+    stop_threshold:
+      name: Limiar de Consumo para Parar (W)
+      default: 0
+      selector:
+        number:
+          min: -1000
+          max: 1000
+          unit_of_measurement: W
+
 trigger:
-  - platform: state
-    entity_id: !input sensor_consumo
-    for: "00:00:10"  # verifica a cada 10 segundos
+  - platform: time_pattern
+    seconds: "/10"  # executa a cada 10 segundos
 
 condition:
   - condition: state
@@ -58,13 +66,8 @@ action:
       amps_atual: "{{ states(input_number_charge_current) | int(0) }}"
       max_amps: !input max_amps
       min_amps: !input min_amps
-  - choose:
-      # Se estamos exportando (consumo < 0) e ainda não chegamos ao máximo, aumenta corrente
-      - conditions: "{{ consumo < 0 and amps_atual < max_amps }}"
-        sequence:
-          - service: number.set_value
-            target:
-              entity_id: !input number_charge_current
-            data:
-              value: "{{ [amps_atual + 1, max_amps] | min }}"
-      # Se consumo positivo e corrente > min, diminui corrent
+      stop_threshold: !input stop_threshold
+      # Ajuste proporcional: 100W = 1A, mínimo 1A, máximo 5A por execução
+      delta: >-
+        {% set d = (consumo / 100) | int %}
+        {% if d == 0
