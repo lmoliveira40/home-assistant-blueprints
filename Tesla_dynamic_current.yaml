@@ -1,19 +1,72 @@
-alias: Tesla - Carregamento Solar MPPT
-description: Ajuste automático da corrente do Tesla baseado na produção solar (MPPT)
+blueprint:
+  name: Tesla - Carregamento Solar MPPT Profissional
+  description: Ajusta automaticamente a corrente do Tesla baseado na produção/consumo solar de forma proporcional e suave
+  domain: automation
+  input:
+    sensor_consumo:
+      name: Sensor de Consumo (W)
+      description: Consumo positivo = consumindo, negativo = exportando
+      selector:
+        entity:
+          domain: sensor
+
+    number_charge_current:
+      name: Corrente do Carregamento (A)
+      description: Entidade "number" que controla a corrente do Tesla
+      selector:
+        entity:
+          domain: number
+
+    binary_charge_cable:
+      name: Cabo Conectado
+      description: Indica se o cabo está conectado
+      selector:
+        entity:
+          domain: binary_sensor
+
+    max_amps:
+      name: Corrente Máxima (A)
+      default: 16
+      selector:
+        number:
+          min: 5
+          max: 32
+          unit_of_measurement: A
+
+    min_amps:
+      name: Corrente Mínima (A)
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 16
+          unit_of_measurement: A
+
+    check_interval:
+      name: Intervalo de Verificação (segundos)
+      default: 10
+      selector:
+        number:
+          min: 5
+          max: 300
+          unit_of_measurement: segundos
+
 trigger:
   - platform: time_pattern
-    seconds: "/10"  # verifica a cada 10 segundos
+    seconds: "/!input check_interval"
+
 condition:
   - condition: state
-    entity_id: binary_sensor.modelx_charge_cable
+    entity_id: !input binary_charge_cable
     state: "on"
+
 action:
   - variables:
-      consumo: "{{ states('sensor.consumo_energy') | float(0) }}"
-      amps_atual: "{{ states('number.charge_current') | int(0) }}"
-      max_amps: 16
-      min_amps: 5
-      # calcula delta proporcional: cada 230W = 1A
+      consumo: "{{ states('!input sensor_consumo') | float(0) }}"
+      amps_atual: "{{ states('!input number_charge_current') | int(0) }}"
+      max_amps: !input max_amps
+      min_amps: !input min_amps
+      # delta proporcional: cada 230W = 1A, limitado entre 1A e 5A
       delta: >-
         {% set d = (consumo / 230) | int %}
         {% if d == 0 and consumo != 0 %}
@@ -22,21 +75,20 @@ action:
           {% if d > 5 %}5{% elif d < -5 %}-5{% else %}{{d}}{% endif %}
         {% endif %}
   - choose:
-      # Consumo negativo -> aumenta corrente suavemente
+      # Se estamos exportando energia (consumo < 0), aumenta corrente proporcional
       - conditions: "{{ consumo < 0 and amps_atual < max_amps }}"
         sequence:
           - service: number.set_value
             target:
-              entity_id: number.charge_current
+              entity_id: !input number_charge_current
             data:
               value: "{{ [amps_atual + (-delta), max_amps] | min }}"
-      # Consumo positivo -> diminui corrente suavemente
+      # Se consumo positivo (consumindo), reduz corrente proporcional
       - conditions: "{{ consumo > 0 and amps_atual > min_amps }}"
         sequence:
           - service: number.set_value
             target:
-              entity_id: number.charge_current
+              entity_id: !input number_charge_current
             data:
               value: "{{ [amps_atual - delta, min_amps] | max }}"
 mode: single
-
