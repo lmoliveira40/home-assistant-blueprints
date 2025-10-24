@@ -1,0 +1,70 @@
+alias: Tesla - Solar Inteligente (v3.0)
+description: Carregamento automático com base no excedente solar (eficiente Teslemetry)
+triggers:
+  # Executa a cada 2 minutos (frequência equilibrada)
+  - trigger: time_pattern
+    minutes: "/2"
+
+  # Também corre sempre que o cabo é ligado
+  - trigger: state
+    entity_id: binary_sensor.modelx_charge_cable
+    to: "on"
+
+conditions:
+  - condition: state
+    entity_id: binary_sensor.modelx_charge_cable
+    state: "on"
+
+actions:
+  - variables:
+      consumo: "{{ states('sensor.consumo_suavizado') | float(0) }}"
+      corrente_atual: "{{ states('number.charge_current') | float(0) }}"
+      max_amps: 16
+      min_amps: 1
+      tensao: 230
+      potencia_excedente: "{{ (consumo * -1) | float(0) }}"  # positivo = exportação
+      corrente_ideal: >
+        {% set ideal = (corrente_atual - (consumo / tensao)) | round(1, 'half') %}
+        {% if ideal > max_amps %}
+          {{ max_amps }}
+        {% elif ideal < min_amps %}
+          {{ min_amps }}
+        {% else %}
+          {{ ideal }}
+        {% endif %}
+      delta_corrente: >
+        {{ (corrente_ideal | float(0)) - (corrente_atual | float(0)) }}
+  
+  # Só atua se a diferença for significativa (>0.5A)
+  - condition: template
+    value_template: "{{ delta_corrente | abs > 0.5 }}"
+
+  - choose:
+      # 1️⃣ Se há excedente e carro está parado → inicia carregamento
+      - conditions:
+          - condition: template
+            value_template: "{{ potencia_excedente > 500 }}"   # >0.5kW de exportação
+          - condition: template
+            value_template: "{{ not is_state('sensor.modelx_charging_state', 'Charging') }}"
+        sequence:
+          - service: tesla.start_charge
+
+      # 2️⃣ Se há excedente → ajusta corrente suavemente
+      - conditions:
+          - condition: template
+            value_template: "{{ potencia_excedente > 300 }}"   # >0.3kW de exportação
+        sequence:
+          - service: tesla.set_charge_current
+            data:
+              amps: "{{ corrente_ideal | float(0) | round(0, 'half') }}"
+
+      # 3️⃣ Se não há excedente há >2 minutos → pausa carregamento
+      - conditions:
+          - condition: template
+            value_template: "{{ potencia_excedente < -300 }}"
+          - condition: template
+            value_template: "{{ is_state('sensor.modelx_charging_state', 'Charging') }}"
+        sequence:
+          - service: tesla.stop_charge
+
+mode: single
